@@ -153,4 +153,6 @@ async function applyHash(): Promise<void> {
 }
 window.addEventListener('hashchange', applyHash);
 await applyHash();
+// exposed for the screenshot harness (scripts/snap.mjs)
+(window as unknown as Record<string, unknown>).__stage = stage;
 (window as unknown as Record<string, unknown>).__handworksReady = true;

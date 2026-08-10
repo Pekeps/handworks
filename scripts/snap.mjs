@@ -45,6 +45,27 @@ for (const pose of poses) {
   const name = (pose || 'neutral').replace(/\./g, '_');
   await page.screenshot({ path: `${OUT}${name}.png` });
   console.log('snapped', name);
+  // extra views when SNAP_VIEWS=1: palm-side and thumb-side profile
+  if (process.env.SNAP_VIEWS) {
+    const views = {
+      back: [0, 0.05, -0.55],
+      side: [-0.55, 0.05, 0.05],
+    };
+    for (const [label, [x, y, z]] of Object.entries(views)) {
+      await page.evaluate((px, py, pz) => {
+        const stage = window.__stage;
+        stage.camera.position.set(px, py, pz);
+        stage.controls?.target.set(0, 0.05, 0);
+      }, x, y, z);
+      await new Promise((r) => setTimeout(r, 150));
+      await page.screenshot({ path: `${OUT}${name}_${label}.png` });
+    }
+    await page.evaluate(() => {
+      const stage = window.__stage;
+      stage.camera.position.set(0, 0.05, 0.55);
+      stage.controls?.target.set(0, 0.05, 0);
+    });
+  }
 }
 
 // shadow theater page

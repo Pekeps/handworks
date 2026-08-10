@@ -174,11 +174,12 @@ export function solveDeltas(
       -spread * ROM.thumbCmcAbduct + (adjust?.thumbLift ?? 0),
     );
     out[cmc!] = quatNormalize(quatMultiply(opposeQ, abductQ));
-    out[mp!] = quatFromAxisAngle(axes.thumbCurl, curl * ROM.thumbMpFlex);
+    const curlAdj = adjust?.thumbCurl ?? 0;
+    out[mp!] = quatFromAxisAngle(axes.thumbCurl, curl * ROM.thumbMpFlex + curlAdj);
     const tipCurl = fp.curlTip ?? curl * 0.9;
     out[ip!] = quatFromAxisAngle(
       axes.thumbCurl,
-      maybeClamp(tipCurl, -0.3, 1, doClamp) * ROM.thumbIpFlex,
+      maybeClamp(tipCurl, -0.3, 1, doClamp) * ROM.thumbIpFlex + curlAdj,
     );
   }
 

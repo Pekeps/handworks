@@ -170,10 +170,10 @@ export const asl: Record<string, HandPose> = {
     },
   },
   S: {
-    // thumb deliberately presses across the front of the curled fingers
-    collide: false,
+    // thumb presses across the front of the curled fingers; the collision
+    // pass lifts it to rest on them instead of clipping through
     fingers: {
-      thumb: { curl: 0.6, oppose: 0.4 },
+      thumb: { curl: 0.45, oppose: 0.8 },
       index: fist, middle: fist, ring: fist, pinky: fist,
     },
   },

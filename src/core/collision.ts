@@ -140,12 +140,16 @@ export interface CollisionAdjust {
   thumbLift: number;
   /** extra thumb CMC rotation along the opposition arc, radians */
   thumbRetract: number;
+  /** extra thumb MP/IP flexion, radians — lets the thumb WRAP a contact
+   *  instead of swinging its whole column away at the base */
+  thumbCurl: number;
 }
 
 export const emptyAdjust = (): CollisionAdjust => ({
   spreadAngle: {},
   thumbLift: 0,
   thumbRetract: 0,
+  thumbCurl: 0,
 });
 
 export interface ResolveOptions {
@@ -154,7 +158,7 @@ export interface ResolveOptions {
 }
 
 /** step magnitudes tried per move — small refinements and pocket-escaping jumps */
-const MAGNITUDES = [0.04, 0.12, 0.3];
+const MAGNITUDES = [0.04, 0.12, 0.3, 0.6];
 const MAX_SPREAD_FIX = 0.35; // ~20°
 const MAX_LIFT = 0.8; // ~46°
 
@@ -164,6 +168,7 @@ const cloneAdjust = (a: CollisionAdjust): CollisionAdjust => ({
   spreadAngle: { ...a.spreadAngle },
   thumbLift: a.thumbLift,
   thumbRetract: a.thumbRetract,
+  thumbCurl: a.thumbCurl,
 });
 
 const bumpSpread = (adj: CollisionAdjust, finger: FingerName, amt: number): void => {
@@ -193,7 +198,7 @@ export function resolveCollisions(
   let transforms = solve(adjust);
   let current = maxDepth(detectContacts(transforms));
   if (current === 0) return transforms;
-  const maxIter = options.maxIterations ?? 10;
+  const maxIter = options.maxIterations ?? 14;
 
   for (let iter = 0; iter < maxIter && current > 0; iter++) {
     // moves relevant to the contacts present right now
@@ -205,6 +210,9 @@ export function resolveCollisions(
         });
         moves.set('retract', (adj, amt) => {
           adj.thumbRetract = clampAbs(adj.thumbRetract + amt, MAX_LIFT);
+        });
+        moves.set('tcurl', (adj, amt) => {
+          adj.thumbCurl = clampAbs(adj.thumbCurl + amt, MAX_LIFT);
         });
         moves.set(`s:${c.b}`, (adj, amt) => bumpSpread(adj, c.b, amt));
       } else {
@@ -233,7 +241,38 @@ export function resolveCollisions(
     current = best.depth;
     transforms = solve(adjust);
   }
+
+  if (current === 0) {
+    // settle: shrink the total correction to the smallest collision-free
+    // scale so digits come to REST against each other instead of hovering
+    // apart (a thumb pressed onto a fist should touch it, not float)
+    let lo = 0;
+    let hi = 1;
+    for (let step = 0; step < 6; step++) {
+      const mid = (lo + hi) / 2;
+      const scaled = scaleAdjust(adjust, mid);
+      if (maxDepth(detectContacts(solve(scaled))) === 0) hi = mid;
+      else lo = mid;
+    }
+    if (hi < 1) {
+      adjust = scaleAdjust(adjust, hi);
+      transforms = solve(adjust);
+    }
+  }
   return transforms;
+}
+
+function scaleAdjust(a: CollisionAdjust, s: number): CollisionAdjust {
+  const spreadAngle: CollisionAdjust['spreadAngle'] = {};
+  for (const [f, v] of Object.entries(a.spreadAngle)) {
+    spreadAngle[f as FingerName] = (v ?? 0) * s;
+  }
+  return {
+    spreadAngle,
+    thumbLift: a.thumbLift * s,
+    thumbRetract: a.thumbRetract * s,
+    thumbCurl: a.thumbCurl * s,
+  };
 }
 
 export type { JointTransforms };
