@@ -13,6 +13,10 @@ question *"how do I make hand shadow figures?"*, generalized into a library.
   text-to-hand sequencer (`hand.fingerspell('HELLO WORLD')`)
 - **Real anatomy** — poses solve through human range-of-motion limits with
   natural inter-joint coupling, so hands never look broken
+- **No interpenetration** — a capsule-based collision pass runs every frame:
+  fingers can't cross through each other, and the thumb slides over curled
+  fingers instead of through them (poses can opt out for deliberate
+  contact, e.g. ASL R's crossed fingers)
 - **Fast everywhere** — one skinned mesh, one draw call, 25 joints per hand;
   ~94 KB models; smooth on phones. Zero-dependency core; `three` is an
   optional peer dependency used only by the renderer layer.

@@ -14,6 +14,7 @@ import {
   restPose,
   Sequencer,
   solveDeltas,
+  detectContacts,
   solvePose,
   asl,
   type HandPose,
@@ -244,5 +245,72 @@ describe('Sequencer / fingerspell', () => {
     const dur = (steps: typeof fast) =>
       steps.reduce((t, s) => t + (s.hold ?? 0) + (s.transition?.duration ?? 0), 0);
     expect(dur(slow)).toBeGreaterThan(dur(fast) * 3);
+  });
+});
+
+describe('collision resolution', () => {
+  const maxDepth = (pose: HandPose, side: Side, collide = true): number => {
+    const contacts = detectContacts(solvePose(pose, { side, collide }));
+    return contacts.reduce((m, c) => Math.max(m, c.depth), 0);
+  };
+
+  it('separates deliberately overlapping straight fingers', () => {
+    const overlap: HandPose = {
+      fingers: { index: { spread: -1.5 }, middle: { spread: 1.5 } },
+    };
+    // without any protection the fingers cross straight through each other
+    const unprotected = detectContacts(
+      solvePose(overlap, { side: 'right', clamp: false, collide: false }),
+    );
+    expect(unprotected.reduce((m, c) => Math.max(m, c.depth), 0)).toBeGreaterThan(0.001);
+    // the no-crossing clamp + collision pass keep them apart
+    expect(maxDepth(overlap, 'right', true)).toBeLessThan(0.0012);
+  });
+
+  it('keeps the thumb outside curled fingers in fist-family poses', () => {
+    for (const side of ['left', 'right'] as Side[]) {
+      for (const name of ['fist', 'point'] as const) {
+        expect(maxDepth(presets.basic[name]!, side), `${side} ${name}`).toBeLessThan(0.0015);
+      }
+    }
+  });
+
+  it('all single-hand presets are penetration-free (unless opted out)', () => {
+    for (const [group, poses] of Object.entries(presets)) {
+      for (const [name, pose] of Object.entries(poses)) {
+        if (isTwoHandPose(pose) || pose.collide === false) continue;
+        for (const side of ['left', 'right'] as Side[]) {
+          expect(maxDepth(pose, side), `${group}.${name} ${side}`).toBeLessThan(0.002);
+        }
+      }
+    }
+  });
+
+  it('fingerspelling transitions stay penetration-free at every blend point', () => {
+    const word = 'HANDS';
+    for (let i = 0; i < word.length - 1; i++) {
+      const a = asl[word[i]!]!;
+      const b = asl[word[i + 1]!]!;
+      for (const t of [0.2, 0.4, 0.5, 0.6, 0.8]) {
+        const mid = blendPoses(a, b, t);
+        if (mid.collide === false) continue;
+        expect(
+          maxDepth(mid, 'right'),
+          `${word[i]}→${word[i + 1]} @${t}`,
+        ).toBeLessThan(0.002);
+      }
+    }
+  });
+
+  it('resolution is deterministic', () => {
+    const pose = presets.basic.fist!;
+    expect(solvePose(pose, { side: 'left' })).toEqual(solvePose(pose, { side: 'left' }));
+  });
+
+  it('collide:false leaves the pose untouched', () => {
+    const crossed = presets.asl.R!;
+    const off = solvePose(crossed, { side: 'right' });
+    const explicit = solvePose(crossed, { side: 'right', collide: false });
+    expect(off).toEqual(explicit);
   });
 });

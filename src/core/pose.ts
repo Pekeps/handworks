@@ -29,6 +29,11 @@ export interface HandPose {
   wrist?: WristPose;
   /** raw per-joint local rotation overrides (bypass the solver) */
   joints?: Partial<Record<JointName, Quat>>;
+  /**
+   * Set false to skip finger-collision resolution for this pose
+   * (deliberate contact/crossing, e.g. ASL R's crossed fingers).
+   */
+  collide?: boolean;
 }
 
 /** A two-hand pose (e.g. shadow figures that need both hands). */
@@ -121,6 +126,8 @@ export function blendPoses(a: HandPose, b: HandPose, t: number): HandPose {
       roll: lerp(ra.wrist.roll, rb.wrist.roll, t),
     },
   };
+  // a deliberate-contact pose keeps collision resolution off mid-transition
+  if (a.collide === false || b.collide === false) pose.collide = false;
   const jointNames = new Set([
     ...Object.keys(ra.joints),
     ...Object.keys(rb.joints),

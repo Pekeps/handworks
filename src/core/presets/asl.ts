@@ -45,6 +45,8 @@ export const asl: Record<string, HandPose> = {
     },
   },
   E: {
+    // fingertips deliberately rest on the folded thumb
+    collide: false,
     fingers: {
       thumb: { curl: 0.5, oppose: 0.85 },
       index: { curl: 0.8, curlTip: 0.9 },
@@ -110,6 +112,8 @@ export const asl: Record<string, HandPose> = {
     },
   },
   M: {
+    // thumb deliberately tucks under the draped fingers
+    collide: false,
     fingers: {
       thumb: { curl: 0.35, oppose: 0.85 },
       index: { curl: 0.75, curlTip: 0.55 },
@@ -119,6 +123,8 @@ export const asl: Record<string, HandPose> = {
     },
   },
   N: {
+    // thumb deliberately tucks under the draped fingers
+    collide: false,
     fingers: {
       thumb: { curl: 0.35, oppose: 0.7 },
       index: { curl: 0.75, curlTip: 0.55 },
@@ -154,6 +160,8 @@ export const asl: Record<string, HandPose> = {
     },
   },
   R: {
+    // deliberately crossed fingers — collision resolution would uncross them
+    collide: false,
     fingers: {
       thumb: { curl: 0.5, oppose: 0.6 },
       index: { curl: 0.05, spread: -0.9 },
@@ -162,12 +170,16 @@ export const asl: Record<string, HandPose> = {
     },
   },
   S: {
+    // thumb deliberately presses across the front of the curled fingers
+    collide: false,
     fingers: {
-      thumb: { curl: 0.55, oppose: 0.75 },
+      thumb: { curl: 0.85, oppose: 0.55, spread: -0.35 },
       index: fist, middle: fist, ring: fist, pinky: fist,
     },
   },
   T: {
+    // thumb deliberately sits between index and middle
+    collide: false,
     fingers: {
       thumb: { curl: 0.2, oppose: 0.45 },
       index: { curl: 0.8, curlTip: 0.5 },

@@ -104,6 +104,24 @@ joint quaternions relative to the model's rest pose:
 
 Determinism: same pose in → same quaternions out; no hidden state.
 
+### Collision handling
+
+Fingers must never pass through each other, in held poses or mid-animation:
+
+- **No-crossing constraint** (part of clamping): adjacent fingers'
+  effective abduction angles may converge only enough to touch — a finger
+  can never sweep through its neighbour, whatever spread values are given.
+- **Capsule resolution** (`collide` option, default on): every phalanx is a
+  capsule; after FK, interpenetrating pairs (adjacent fingers, thumb vs
+  each finger) are resolved by small parameter-space corrections found by
+  numeric probing — abduction pushes fingers apart, and the thumb lifts off
+  the palm or retracts along its opposition arc, so it travels *over*
+  curled fingers the way a real thumb does. Deterministic, iterative
+  (≤6 passes), runs every animation frame so tween in-betweens are clean.
+- **Deliberate contact**: a pose may set `collide: false` (kept during
+  blends into/out of it) for shapes that require touching or crossing —
+  ASL R (crossed fingers), M/N/T (thumb tucked under fingers), E and S.
+
 ### Animation
 
 - `blendPoses(a, b, t)` interpolates in *parameter space* when both poses are

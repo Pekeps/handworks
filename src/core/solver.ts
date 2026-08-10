@@ -15,6 +15,11 @@ import {
   type Quat,
   type Vec3,
 } from './math.js';
+import {
+  emptyAdjust,
+  resolveCollisions,
+  type CollisionAdjust,
+} from './collision.js';
 import { resolvePose, type HandPose } from './pose.js';
 import {
   AXES,
@@ -60,6 +65,11 @@ export interface SolveOptions {
   side?: Side;
   /** clamp parameters to human range of motion (default true) */
   clamp?: boolean;
+  /**
+   * Resolve finger interpenetration after solving (default true; a pose can
+   * opt out with `pose.collide = false`, e.g. deliberately crossed fingers).
+   */
+  collide?: boolean;
 }
 
 /** Rotation of each joint relative to its rest orientation, joint-local. */
@@ -81,8 +91,13 @@ const maybeClamp = (v: number, lo: number, hi: number, doClamp: boolean): number
  * Solve pose parameters into per-joint delta rotations (relative to rest,
  * in each joint's local frame). Deterministic; raw `joints` overrides are
  * treated as parent-relative rotation deltas and win over the solver.
+ * `adjust` carries internal collision-resolution corrections.
  */
-export function solveDeltas(pose: HandPose, options: SolveOptions = {}): JointDeltas {
+export function solveDeltas(
+  pose: HandPose,
+  options: SolveOptions = {},
+  adjust?: CollisionAdjust,
+): JointDeltas {
   const side = options.side ?? 'right';
   const doClamp = options.clamp ?? true;
   const axes = AXES[side];
@@ -92,11 +107,37 @@ export function solveDeltas(pose: HandPose, options: SolveOptions = {}): JointDe
   for (const j of JOINT_NAMES) out[j] = QUAT_IDENTITY;
 
   // --- fingers ---
-  for (const finger of FINGER_NAMES) {
-    if (finger === 'thumb') continue;
+  // effective abduction angles first, so crossing can be prevented globally
+  const NON_THUMB = ['index', 'middle', 'ring', 'pinky'] as const;
+  const spreadEff = {} as Record<(typeof NON_THUMB)[number], number>;
+  for (const finger of NON_THUMB) {
+    const fp = p.fingers[finger];
+    const spread = maybeClamp(fp.spread, -1.5, 1.5, doClamp);
+    const posCurl = clamp(Math.max(0, fp.curl), 0, 1);
+    // splay fades out as the finger curls (fingers converge in a fist)
+    spreadEff[finger] =
+      spread * ROM.spreadMax * SPREAD_SCALE[finger] * (1 - 0.8 * posCurl);
+  }
+  if (doClamp) {
+    // no-crossing constraint: adjacent fingers may converge only enough to
+    // touch (≈ CONVERGE_LIMIT of relative abduction), never pass through
+    const CONVERGE_LIMIT = 0.12;
+    for (let sweep = 0; sweep < 2; sweep++) {
+      for (let i = 0; i < NON_THUMB.length - 1; i++) {
+        const a = NON_THUMB[i]!; // radial neighbour
+        const b = NON_THUMB[i + 1]!;
+        const gap = spreadEff[a] - spreadEff[b];
+        if (gap < -CONVERGE_LIMIT) {
+          const fix = (-CONVERGE_LIMIT - gap) / 2;
+          spreadEff[a] += fix;
+          spreadEff[b] -= fix;
+        }
+      }
+    }
+  }
+  for (const finger of NON_THUMB) {
     const fp = p.fingers[finger];
     const curl = maybeClamp(fp.curl, -ROM.mcpHyper / ROM.mcpFlex, 1, doClamp);
-    const spread = maybeClamp(fp.spread, -1.5, 1.5, doClamp);
     const [, mcp, pip, dip] = fingerJoints(finger);
 
     const posCurl = Math.max(0, curl);
@@ -105,12 +146,10 @@ export function solveDeltas(pose: HandPose, options: SolveOptions = {}): JointDe
     const dipAngle = maybeClamp(tipCurl, -0.2, 1, doClamp) * ROM.dipFlex;
 
     const mcpFlexQ = quatFromAxisAngle(axes.fingerCurl, curl * ROM.mcpFlex);
-    const spreadAngle =
-      spread * ROM.spreadMax * SPREAD_SCALE[finger as Exclude<FingerName, 'thumb'>];
-    // splay fades out as the finger curls (fingers converge in a fist)
+    // collision corrections apply at full strength regardless of curl
     const spreadQ = quatFromAxisAngle(
       axes.fingerSpread,
-      spreadAngle * (1 - 0.8 * clamp(posCurl, 0, 1)),
+      spreadEff[finger] + (adjust?.spreadAngle[finger] ?? 0),
     );
 
     out[mcp!] = quatNormalize(quatMultiply(spreadQ, mcpFlexQ));
@@ -126,8 +165,14 @@ export function solveDeltas(pose: HandPose, options: SolveOptions = {}): JointDe
     const spread = maybeClamp(fp.spread, -1, 1, doClamp);
     const [cmc, mp, ip] = fingerJoints('thumb');
 
-    const opposeQ = quatFromAxisAngle(axes.thumbOppose, oppose * ROM.thumbCmcOppose);
-    const abductQ = quatFromAxisAngle(axes.thumbAbduct, -spread * ROM.thumbCmcAbduct);
+    const opposeQ = quatFromAxisAngle(
+      axes.thumbOppose,
+      oppose * ROM.thumbCmcOppose + (adjust?.thumbRetract ?? 0),
+    );
+    const abductQ = quatFromAxisAngle(
+      axes.thumbAbduct,
+      -spread * ROM.thumbCmcAbduct + (adjust?.thumbLift ?? 0),
+    );
     out[cmc!] = quatNormalize(quatMultiply(opposeQ, abductQ));
     out[mp!] = quatFromAxisAngle(axes.thumbCurl, curl * ROM.thumbMpFlex);
     const tipCurl = fp.curlTip ?? curl * 0.9;
@@ -165,17 +210,8 @@ export function solveDeltas(pose: HandPose, options: SolveOptions = {}): JointDe
   return out;
 }
 
-/**
- * Solve a pose all the way to armature-space joint transforms via forward
- * kinematics over the anatomical hierarchy. This is what renderers apply:
- * set each joint node's position and rotation (the standard WebXR hand rigs
- * keep joints as flat siblings, so both must be written).
- */
-export function solvePose(pose: HandPose, options: SolveOptions = {}): JointTransforms {
-  const side = options.side ?? 'right';
-  const deltas = solveDeltas(pose, options);
+function fkTransforms(deltas: JointDeltas, side: Side): JointTransforms {
   const rel = relativeRest(side);
-
   const out = {} as JointTransforms;
   // JOINT_NAMES is ordered parents-first (wrist, then each finger base→tip)
   for (const j of JOINT_NAMES) {
@@ -193,4 +229,22 @@ export function solvePose(pose: HandPose, options: SolveOptions = {}): JointTran
     };
   }
   return out;
+}
+
+/**
+ * Solve a pose all the way to armature-space joint transforms via forward
+ * kinematics over the anatomical hierarchy. This is what renderers apply:
+ * set each joint node's position and rotation (the standard WebXR hand rigs
+ * keep joints as flat siblings, so both must be written).
+ *
+ * Unless disabled (options.collide or pose.collide = false), finger
+ * interpenetration is resolved with small anatomical corrections.
+ */
+export function solvePose(pose: HandPose, options: SolveOptions = {}): JointTransforms {
+  const side = options.side ?? 'right';
+  const collide = options.collide ?? pose.collide ?? true;
+  const solve = (adjust: CollisionAdjust) =>
+    fkTransforms(solveDeltas(pose, options, adjust), side);
+  if (!collide) return solve(emptyAdjust());
+  return resolveCollisions(solve, { side });
 }
