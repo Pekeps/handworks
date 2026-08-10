@@ -17,6 +17,9 @@ question *"how do I make hand shadow figures?"*, generalized into a library.
   fingers can't cross through each other, and the thumb slides over curled
   fingers instead of through them (poses can opt out for deliberate
   contact, e.g. ASL R's crossed fingers)
+- **Realistic skin** — a procedural skin material (tonal mottling, pore-level
+  bump, soft sheen) generated at runtime from seeded noise: six ready-made
+  tones plus any custom color, no image assets
 - **Fast everywhere** — one skinned mesh, one draw call, 25 joints per hand;
   ~94 KB models; smooth on phones. Zero-dependency core; `three` is an
   optional peer dependency used only by the renderer layer.

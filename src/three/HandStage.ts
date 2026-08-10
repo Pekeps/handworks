@@ -92,12 +92,12 @@ export class HandStage {
     this.camera.position.set(0, 0.05, 0.55);
     this.camera.lookAt(0, 0.05, 0);
 
-    this.keyLight = new DirectionalLight(0xfff2e6, 2.6);
+    this.keyLight = new DirectionalLight(0xfffaf4, 2.2);
     this.keyLight.position.set(0.4, 0.6, 0.7);
     this.keyLight.castShadow = true;
     this.keyLight.shadow.mapSize.set(1024, 1024);
     this.scene.add(this.keyLight);
-    this.fillLight = new HemisphereLight(0xb8c4ff, 0x3a2e28, 1.1);
+    this.fillLight = new HemisphereLight(0xdde4f5, 0x4a4540, 0.9);
     this.scene.add(this.fillLight);
 
     this.controls =

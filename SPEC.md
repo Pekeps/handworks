@@ -172,6 +172,11 @@ model.update(dt);
 
 - `HandModel` — loads a GLB (vendored by default), binds bones by WebXR
   joint name, applies solver output each frame, owns a `Tween`/`Sequencer`.
+  Applies a **procedural skin material** by default (`skin` option):
+  seeded-noise albedo mottling, pore-level bump, roughness variation and
+  sheen for soft backscatter — six preset tones (`SKIN_TONES`) or any css
+  color, switchable live via `setSkin()`; `skin: false` keeps the model's
+  own material. No image assets; deterministic across runs.
 - `HandStage` — renderer with `antialias`, capped `devicePixelRatio` (≤2),
   ACES tone mapping, soft key + fill lighting, orbit controls, resize
   observer, rAF loop with delta clamping. Everything overridable.

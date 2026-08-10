@@ -1,6 +1,7 @@
 import {
   Bone,
   Group,
+  Material,
   Mesh,
   MeshStandardMaterial,
   Object3D,
@@ -8,6 +9,7 @@ import {
   SkinnedMesh,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { createSkinMaterial, type SkinOptions } from './skin.js';
 import {
   fingerspellSequence,
   getPreset,
@@ -34,6 +36,11 @@ export interface HandModelOptions {
   url?: string | URL;
   /** reuse an existing loader (e.g. with DRACO configured) */
   loader?: GLTFLoader;
+  /**
+   * Procedural skin material options (see SkinOptions / SKIN_TONES).
+   * Pass false to keep the model's own material.
+   */
+  skin?: SkinOptions | false;
 }
 
 export interface PoseCommandOptions extends TweenOptions {}
@@ -60,7 +67,7 @@ export class HandModel {
   /** live per-finger parameter proxies (hand.fingers.index.curl = 0.5) */
   readonly fingers: Record<FingerName, LiveFinger>;
 
-  private constructor(side: Side, root: Group) {
+  private constructor(side: Side, root: Group, skin: SkinOptions | false) {
     this.side = side;
     this.object3D = root;
     root.traverse((node: Object3D) => {
@@ -71,10 +78,15 @@ export class HandModel {
         node.castShadow = true;
         node.frustumCulled = false;
         const mesh = node as SkinnedMesh;
-        const mat = mesh.material as MeshStandardMaterial;
-        if (mat?.isMeshStandardMaterial) {
-          mat.roughness = 0.55;
-          mat.metalness = 0;
+        if (skin !== false) {
+          (mesh.material as Material).dispose();
+          mesh.material = createSkinMaterial(skin);
+        } else {
+          const mat = mesh.material as MeshStandardMaterial;
+          if (mat?.isMeshStandardMaterial) {
+            mat.roughness = 0.55;
+            mat.metalness = 0;
+          }
         }
       }
     });
@@ -94,7 +106,7 @@ export class HandModel {
     const root = new Group();
     root.name = `handworks-${side}`;
     root.add(gltf.scene);
-    const model = new HandModel(side, root);
+    const model = new HandModel(side, root, options.skin ?? {});
     if (model.bones.size < 25) {
       throw new Error(
         `handworks: model at ${url} exposes ${model.bones.size}/25 WebXR hand joints`,
@@ -102,6 +114,16 @@ export class HandModel {
     }
     model.applyPose(model.currentPose);
     return model;
+  }
+
+  /** Swap the procedural skin (e.g. a different tone). */
+  setSkin(options: SkinOptions): void {
+    this.object3D.traverse((node) => {
+      const mesh = node as Mesh;
+      if (!mesh.isMesh) return;
+      (mesh.material as Material).dispose();
+      mesh.material = createSkinMaterial(options);
+    });
   }
 
   /** The raw three.js bone for a joint — full manual control. */

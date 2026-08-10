@@ -3,6 +3,7 @@ import {
   HandStage,
   presets,
   isTwoHandPose,
+  SKIN_TONES,
   type FingerName,
   type HandModel,
   type Side,
@@ -21,6 +22,19 @@ sideSelect.addEventListener('change', async () => {
   hand = await stage.addHand({ side });
   hand.setPose(pose);
   refreshSliders();
+});
+
+// --- skin tone ---
+const skinSelect = document.getElementById('skin') as HTMLSelectElement;
+for (const tone of Object.keys(SKIN_TONES)) {
+  const opt = document.createElement('option');
+  opt.value = tone;
+  opt.textContent = tone;
+  skinSelect.appendChild(opt);
+}
+skinSelect.value = 'fair';
+skinSelect.addEventListener('change', () => {
+  hand.setSkin({ tone: skinSelect.value });
 });
 
 // --- preset gallery ---
