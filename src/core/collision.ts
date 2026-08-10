@@ -128,6 +128,10 @@ export function detectContacts(transforms: JointTransforms): Contact[] {
 export const pairDepth = (contacts: Contact[], a: FingerName, b: FingerName): number =>
   contacts.find((c) => c.a === a && c.b === b)?.depth ?? 0;
 
+/** Worst penetration anywhere on the hand, 0 when collision-free. */
+export const maxDepth = (contacts: Contact[]): number =>
+  contacts.reduce((m, c) => Math.max(m, c.depth), 0);
+
 /** Parameter-space corrections applied on top of a solved pose. */
 export interface CollisionAdjust {
   /** extra abduction per finger, radians (sign found by probing) */
@@ -149,68 +153,10 @@ export interface ResolveOptions {
   maxIterations?: number;
 }
 
-const PROBE = 0.02; // radians used to find the helpful correction direction
-const GAIN = 1.2; // slight overcorrection so contacts converge
-const MAX_STEP = 0.2; // per-iteration correction cap, radians
+/** step magnitudes tried per move — small refinements and pocket-escaping jumps */
+const MAGNITUDES = [0.04, 0.12, 0.3];
 const MAX_SPREAD_FIX = 0.35; // ~20°
 const MAX_LIFT = 0.8; // ~46°
-
-/**
- * Iteratively resolve finger interpenetration. `solve` re-runs the pose
- * solver with the given adjustments (supplied by solver.ts to avoid a
- * circular import). Returns collision-free transforms (best effort).
- */
-export function resolveCollisions(
-  solve: (adjust: CollisionAdjust) => JointTransforms,
-  options: ResolveOptions,
-): JointTransforms {
-  const adjust = emptyAdjust();
-  let transforms = solve(adjust);
-  const maxIter = options.maxIterations ?? 6;
-
-  for (let iter = 0; iter < maxIter; iter++) {
-    const contacts = detectContacts(transforms);
-    if (contacts.length === 0) break;
-
-    for (const contact of contacts) {
-      const lever = 0.05; // ≈ MCP→contact distance; converts depth to angle
-      const angle = Math.min((contact.depth / lever) * GAIN, MAX_STEP);
-      if (contact.a === 'thumb') {
-        // two escape routes: lift off the palm, or retract along the
-        // opposition arc — probe both and take the more effective one
-        const best = probeBest(solve, adjust, contact, [
-          (adj, s) => {
-            adj.thumbLift += s * PROBE;
-          },
-          (adj, s) => {
-            adj.thumbRetract += s * PROBE;
-          },
-        ]);
-        if (best.dof === 0) {
-          adjust.thumbLift = clampAbs(adjust.thumbLift + best.dir * angle, MAX_LIFT);
-        } else {
-          adjust.thumbRetract = clampAbs(adjust.thumbRetract + best.dir * angle, MAX_LIFT);
-        }
-      } else {
-        // push the two fingers apart with opposite abduction corrections
-        const dir = probeSign(solve, adjust, contact, (adj, s) => {
-          adj.spreadAngle[contact.a] = (adj.spreadAngle[contact.a] ?? 0) + s * PROBE;
-          adj.spreadAngle[contact.b] = (adj.spreadAngle[contact.b] ?? 0) - s * PROBE;
-        });
-        adjust.spreadAngle[contact.a] = clampAbs(
-          (adjust.spreadAngle[contact.a] ?? 0) + dir * angle * 0.5,
-          MAX_SPREAD_FIX,
-        );
-        adjust.spreadAngle[contact.b] = clampAbs(
-          (adjust.spreadAngle[contact.b] ?? 0) - dir * angle * 0.5,
-          MAX_SPREAD_FIX,
-        );
-      }
-    }
-    transforms = solve(adjust);
-  }
-  return transforms;
-}
 
 const clampAbs = (v: number, max: number): number => Math.max(-max, Math.min(max, v));
 
@@ -220,39 +166,74 @@ const cloneAdjust = (a: CollisionAdjust): CollisionAdjust => ({
   thumbRetract: a.thumbRetract,
 });
 
-/** Try a small ± perturbation of a correction and keep the sign that helps. */
-function probeSign(
-  solve: (adjust: CollisionAdjust) => JointTransforms,
-  adjust: CollisionAdjust,
-  contact: Contact,
-  perturb: (adj: CollisionAdjust, sign: number) => void,
-): number {
-  const depths: number[] = [];
-  for (const sign of [1, -1]) {
-    const trial = cloneAdjust(adjust);
-    perturb(trial, sign);
-    depths.push(pairDepth(detectContacts(solve(trial)), contact.a, contact.b));
-  }
-  return depths[0]! <= depths[1]! ? 1 : -1;
-}
+const bumpSpread = (adj: CollisionAdjust, finger: FingerName, amt: number): void => {
+  adj.spreadAngle[finger] = clampAbs((adj.spreadAngle[finger] ?? 0) + amt, MAX_SPREAD_FIX);
+};
 
-/** Probe several DOFs in both directions; return the most effective one. */
-function probeBest(
+type Move = (adj: CollisionAdjust, amt: number) => void;
+
+/**
+ * Iteratively resolve finger interpenetration. `solve` re-runs the pose
+ * solver with the given adjustments (supplied by solver.ts to avoid a
+ * circular import).
+ *
+ * Greedy descent on the WORST penetration anywhere on the hand: each
+ * iteration tries every relevant correction (thumb lift / retract, finger
+ * abduction, pairwise separation) at several magnitudes in both directions
+ * and adopts the best strictly-improving one. Scoring globally means a move
+ * that frees one pair by shoving a digit into its neighbour never counts as
+ * progress, and strict improvement means the loop can never oscillate.
+ * Deterministic; returns best-effort transforms.
+ */
+export function resolveCollisions(
   solve: (adjust: CollisionAdjust) => JointTransforms,
-  adjust: CollisionAdjust,
-  contact: Contact,
-  perturbs: ((adj: CollisionAdjust, sign: number) => void)[],
-): { dof: number; dir: number } {
-  let best = { dof: 0, dir: 1, depth: Infinity };
-  for (let dof = 0; dof < perturbs.length; dof++) {
-    for (const dir of [1, -1]) {
-      const trial = cloneAdjust(adjust);
-      perturbs[dof]!(trial, dir);
-      const depth = pairDepth(detectContacts(solve(trial)), contact.a, contact.b);
-      if (depth < best.depth) best = { dof, dir, depth };
+  options: ResolveOptions,
+): JointTransforms {
+  let adjust = emptyAdjust();
+  let transforms = solve(adjust);
+  let current = maxDepth(detectContacts(transforms));
+  if (current === 0) return transforms;
+  const maxIter = options.maxIterations ?? 10;
+
+  for (let iter = 0; iter < maxIter && current > 0; iter++) {
+    // moves relevant to the contacts present right now
+    const moves = new Map<string, Move>();
+    for (const c of detectContacts(transforms)) {
+      if (c.a === 'thumb') {
+        moves.set('lift', (adj, amt) => {
+          adj.thumbLift = clampAbs(adj.thumbLift + amt, MAX_LIFT);
+        });
+        moves.set('retract', (adj, amt) => {
+          adj.thumbRetract = clampAbs(adj.thumbRetract + amt, MAX_LIFT);
+        });
+        moves.set(`s:${c.b}`, (adj, amt) => bumpSpread(adj, c.b, amt));
+      } else {
+        moves.set(`p:${c.a}:${c.b}`, (adj, amt) => {
+          bumpSpread(adj, c.a, amt);
+          bumpSpread(adj, c.b, -amt);
+        });
+        moves.set(`s:${c.a}`, (adj, amt) => bumpSpread(adj, c.a, amt));
+        moves.set(`s:${c.b}`, (adj, amt) => bumpSpread(adj, c.b, amt));
+      }
     }
+
+    let best: { adjust: CollisionAdjust; depth: number } | null = null;
+    for (const move of moves.values()) {
+      for (const sign of [1, -1]) {
+        for (const mag of MAGNITUDES) {
+          const trial = cloneAdjust(adjust);
+          move(trial, sign * mag);
+          const depth = maxDepth(detectContacts(solve(trial)));
+          if (depth < (best?.depth ?? current) - 1e-6) best = { adjust: trial, depth };
+        }
+      }
+    }
+    if (!best) break; // plateau — no single move helps any further
+    adjust = best.adjust;
+    current = best.depth;
+    transforms = solve(adjust);
   }
-  return best;
+  return transforms;
 }
 
 export type { JointTransforms };

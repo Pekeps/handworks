@@ -83,14 +83,14 @@ export const asl: Record<string, HandPose> = {
   },
   I: {
     fingers: {
-      thumb: { curl: 0.5, oppose: 0.55 },
+      thumb: { curl: 0.4, oppose: 0.45 },
       index: fist, middle: fist, ring: fist,
       pinky: { curl: 0 },
     },
   },
   J: {
     fingers: {
-      thumb: { curl: 0.5, oppose: 0.55 },
+      thumb: { curl: 0.4, oppose: 0.45 },
       index: fist, middle: fist, ring: fist,
       pinky: { curl: 0 },
     },
@@ -135,7 +135,7 @@ export const asl: Record<string, HandPose> = {
   },
   O: {
     fingers: {
-      thumb: { curl: 0.3, oppose: 0.7 },
+      thumb: { curl: 0.3, oppose: 0.6 },
       index: { curl: 0.55, curlTip: 0.5 },
       middle: { curl: 0.55, curlTip: 0.5 },
       ring: { curl: 0.55, curlTip: 0.5 },
@@ -173,7 +173,7 @@ export const asl: Record<string, HandPose> = {
     // thumb deliberately presses across the front of the curled fingers
     collide: false,
     fingers: {
-      thumb: { curl: 0.85, oppose: 0.55, spread: -0.35 },
+      thumb: { curl: 0.6, oppose: 0.4 },
       index: fist, middle: fist, ring: fist, pinky: fist,
     },
   },
@@ -237,7 +237,7 @@ export const asl: Record<string, HandPose> = {
 
   N0: {
     fingers: {
-      thumb: { curl: 0.3, oppose: 0.7 },
+      thumb: { curl: 0.3, oppose: 0.6 },
       index: { curl: 0.55, curlTip: 0.5 },
       middle: { curl: 0.55, curlTip: 0.5 },
       ring: { curl: 0.55, curlTip: 0.5 },

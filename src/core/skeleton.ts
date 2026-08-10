@@ -213,20 +213,25 @@ export interface SideAxes {
 /**
  * Measured from the rig; signs verified with forward kinematics in the test
  * suite (fingertips must approach the palm under positive curl, etc.).
+ *
+ * Every joint (thumb included) has its nail/dorsal side on local +Y and its
+ * bone along −Z, so flexion is a pure hinge about local −X for all digits —
+ * the thumb's difference is that its whole column is pre-rotated ~90°, not
+ * that its joints hinge differently.
  */
 export const AXES: Record<Side, SideAxes> = {
   left: {
     fingerCurl: [-1, 0, 0],
     fingerSpread: [0, -1, 0],
-    thumbCurl: [-0.33, -0.94, 0],
+    thumbCurl: [-1, 0, 0],
     thumbOppose: [-0.89, 0.31, 0.32],
-    thumbAbduct: [-0.33, -0.94, 0],
+    thumbAbduct: [0, -1, 0],
   },
   right: {
     fingerCurl: [-1, 0, 0],
     fingerSpread: [0, 1, 0],
-    thumbCurl: [-0.33, 0.94, 0],
+    thumbCurl: [-1, 0, 0],
     thumbOppose: [-0.89, -0.31, -0.33],
-    thumbAbduct: [-0.33, 0.94, 0],
+    thumbAbduct: [0, 1, 0],
   },
 };
