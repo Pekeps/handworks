@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>handworks — shadow theater</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="layout">
+    <div class="panel">
+      <h1>Shadow theater</h1>
+      <p class="muted"><a href="./index.html">← demos</a></p>
+      <h2>Figures</h2>
+      <div class="grid" id="figures"></div>
+      <h2>Options</h2>
+      <div class="row">
+        <label style="width: auto"><input type="checkbox" id="silhouette" /> silhouette hands</label>
+      </div>
+      <div class="grid" style="margin-top: 8px">
+        <button id="animate">Animate mouth</button>
+      </div>
+      <p class="muted" style="margin-top: 16px">
+        Orbit the camera to see the lamp, the hand, and its shadow on the wall —
+        the shadow is the show.
+      </p>
+    </div>
+    <div class="stage" id="stage"></div>
+  </div>
+  <script type="module" src="./shadow.ts"></script>
+</body>
+</html>

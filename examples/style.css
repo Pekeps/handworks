@@ -1,0 +1,72 @@
+* { box-sizing: border-box; margin: 0; }
+body {
+  font-family: system-ui, sans-serif;
+  background: #14161a;
+  color: #e8e6e3;
+  min-height: 100vh;
+}
+a { color: #7fb4ff; }
+.layout { display: flex; height: 100vh; }
+.panel {
+  width: 320px;
+  min-width: 280px;
+  padding: 16px;
+  overflow-y: auto;
+  background: #1c1f24;
+  border-right: 1px solid #2a2e35;
+}
+.stage { flex: 1; position: relative; min-width: 0; }
+.stage canvas { display: block; width: 100%; height: 100%; }
+h1 { font-size: 18px; margin-bottom: 4px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: #9aa3ad; margin: 16px 0 8px; }
+.muted { color: #9aa3ad; font-size: 13px; }
+.row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.row label { width: 64px; font-size: 13px; color: #c9cdd3; }
+.row input[type='range'] { flex: 1; }
+.row output { width: 38px; font-size: 12px; text-align: right; color: #9aa3ad; }
+.grid { display: flex; flex-wrap: wrap; gap: 6px; }
+button {
+  background: #2a2e35;
+  color: #e8e6e3;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+button:hover { background: #343a43; }
+button.primary { background: #2c5c9e; border-color: #3a6fb8; }
+button.primary:hover { background: #356cb6; }
+select, input[type='text'] {
+  background: #14161a;
+  color: #e8e6e3;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+  width: 100%;
+}
+textarea {
+  width: 100%;
+  height: 140px;
+  background: #14161a;
+  color: #9fe8a8;
+  border: 1px solid #3a3f47;
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  padding: 8px;
+}
+.letter {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 64px;
+  font-weight: 700;
+  color: #ffffffcc;
+  text-shadow: 0 2px 12px #000a;
+  pointer-events: none;
+}
+.home { max-width: 640px; margin: 60px auto; padding: 0 20px; line-height: 1.6; }
+.home ul { margin: 16px 0 0 20px; }

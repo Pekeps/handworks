@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>handworks — playground</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="layout">
+    <div class="panel" id="panel">
+      <h1>Playground</h1>
+      <p class="muted"><a href="./index.html">← demos</a></p>
+      <h2>Hand</h2>
+      <select id="side">
+        <option value="right" selected>right</option>
+        <option value="left">left</option>
+      </select>
+      <h2>Presets</h2>
+      <div class="grid" id="presets"></div>
+      <h2>Fingers</h2>
+      <div id="sliders"></div>
+      <h2>Wrist</h2>
+      <div id="wrist"></div>
+      <h2>Pose JSON</h2>
+      <textarea id="json" readonly></textarea>
+    </div>
+    <div class="stage" id="stage"></div>
+  </div>
+  <script type="module" src="./playground.ts"></script>
+</body>
+</html>
