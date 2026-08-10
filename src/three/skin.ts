@@ -95,13 +95,24 @@ function canvasTexture(
   ctx.putImageData(img, 0, 0);
   const tex = new CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = RepeatWrapping;
+  // rows are written in the glTF UV convention (v = row/size), so the
+  // texture must not be flipped on upload — required for the 1:1 crease map
+  tex.flipY = false;
   if (srgb) tex.colorSpace = SRGBColorSpace;
   return tex;
 }
 
-/** Build the skin material. Call `dispose()` on the old one when swapping. */
-export function createSkinMaterial(options: SkinOptions = {}): MeshPhysicalMaterial {
-  const size = options.textureSize ?? 512;
+/**
+ * Build the skin material. `crease` is an optional 1:1 UV-space crease map
+ * (see creases.ts) baked from the mesh — creases darken the albedo, groove
+ * the bump map and roughen the surface exactly where real hands crease.
+ * Call `dispose()` on the old material when swapping.
+ */
+export function createSkinMaterial(
+  options: SkinOptions = {},
+  crease?: { data: Float32Array; palm: Float32Array; size: number },
+): MeshPhysicalMaterial {
+  const size = crease?.size ?? options.textureSize ?? 512;
   const detail = options.detail ?? 1;
   const base = new Color(
     typeof options.tone === 'string' && options.tone in SKIN_TONES
@@ -109,19 +120,40 @@ export function createSkinMaterial(options: SkinOptions = {}): MeshPhysicalMater
       : (options.tone ?? SKIN_TONES.fair!),
   );
 
-  const mottle = makeNoise(size, 3, 101); // slow tonal variation
-  const flush = makeNoise(size, 2, 202); // reddish patches (blood flow)
-  const pores = makeNoise(size, 5, 303); // high-frequency detail
+  const noiseSize = 512;
+  const mottle = makeNoise(noiseSize, 3, 101); // slow tonal variation
+  const pores = makeNoise(noiseSize, 5, 303); // high-frequency detail
+  const wrinkle = makeNoise(noiseSize, 6, 404); // finest micro-wrinkles
+
+  // noise tiles across the (possibly larger) crease-map resolution
+  const noiseAt = (arr: Float32Array, i: number): number => {
+    const x = (i % size) % noiseSize;
+    const y = Math.floor(i / size) % noiseSize;
+    return arr[y * noiseSize + x]!;
+  };
+  const creaseAt = (i: number): number => (crease ? crease.data[i]! : 0);
+  const palmAt = (i: number): number => (crease ? crease.palm[i]! : 0);
+
+  // real hands: the palm is lighter, less saturated and evenly toned; the
+  // back is warmer with visible micro-texture
+  const lum = 0.3 * base.r + 0.55 * base.g + 0.15 * base.b;
 
   const albedo = canvasTexture(
     size,
     (i, d) => {
-      const m = (mottle[i]! - 0.5) * 0.14; // ±7 % lightness
-      const f = Math.max(0, flush[i]! - 0.55) * 0.28; // occasional warm flush
-      const p = (pores[i]! - 0.5) * 0.05 * detail;
-      const r = base.r * (1 + m + p) + f * 0.09;
-      const g = base.g * (1 + m + p) + f * 0.015;
-      const b = base.b * (1 + m + p) - f * 0.01;
+      const pm = palmAt(i);
+      const m = (noiseAt(mottle, i) - 0.5) * 0.05 * (1 - pm * 0.7); // subtle, mostly on the back
+      const p = (noiseAt(pores, i) - 0.5) * 0.028 * detail;
+      const k = creaseAt(i) * 0.26; // creases darken, slightly warm
+      // palm: lighter and pushed toward neutral
+      const lift = 1 + pm * 0.11;
+      const mix = pm * 0.25;
+      let r = (base.r * (1 - mix) + lum * 1.12 * mix) * lift;
+      let g = (base.g * (1 - mix) + lum * 1.12 * mix) * lift;
+      let b = (base.b * (1 - mix) + lum * 1.12 * mix) * lift;
+      r = r * (1 + m + p) * (1 - k * 0.75);
+      g = g * (1 + m + p) * (1 - k);
+      b = b * (1 + m + p) * (1 - k * 1.1);
       d[i * 4] = Math.min(255, Math.max(0, r * 255));
       d[i * 4 + 1] = Math.min(255, Math.max(0, g * 255));
       d[i * 4 + 2] = Math.min(255, Math.max(0, b * 255));
@@ -133,8 +165,13 @@ export function createSkinMaterial(options: SkinOptions = {}): MeshPhysicalMater
   const bump = canvasTexture(
     size,
     (i, d) => {
-      const v = (0.5 + (pores[i]! - 0.5) * 0.9 + (mottle[i]! - 0.5) * 0.35) * 255;
-      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+      const pm = palmAt(i);
+      // back of hand: pronounced micro-wrinkle network; palm: fine and even
+      const micro =
+        (noiseAt(pores, i) - 0.5) * (0.35 + (1 - pm) * 0.35) +
+        (noiseAt(wrinkle, i) - 0.5) * (0.25 + (1 - pm) * 0.3);
+      const v = (0.55 + micro * detail - creaseAt(i) * 0.5) * 255;
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = Math.min(255, Math.max(0, v));
       d[i * 4 + 3] = 255;
     },
     false,
@@ -143,9 +180,10 @@ export function createSkinMaterial(options: SkinOptions = {}): MeshPhysicalMater
   const rough = canvasTexture(
     size,
     (i, d) => {
-      // roughnessMap uses the green channel
-      const v = (0.85 + (pores[i]! - 0.5) * 0.35) * 255;
-      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+      // roughnessMap uses the green channel; palms are slightly glossier
+      const v =
+        (0.85 - palmAt(i) * 0.07 + (noiseAt(pores, i) - 0.5) * 0.25 + creaseAt(i) * 0.12) * 255;
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = Math.min(255, Math.max(0, v));
       d[i * 4 + 3] = 255;
     },
     false,

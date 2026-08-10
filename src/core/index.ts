@@ -3,7 +3,10 @@ export * from './math.js';
 export * from './skeleton.js';
 export {
   detectContacts,
+  emptyAdjust,
+  mixAdjust,
   type CollisionAdjust,
+  type CollisionBody,
   type Contact,
 } from './collision.js';
 export * from './pose.js';

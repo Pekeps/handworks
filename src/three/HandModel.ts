@@ -9,18 +9,23 @@ import {
   SkinnedMesh,
 } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { bakeCreaseMap, type CreaseMap } from './creases.js';
 import { createSkinMaterial, type SkinOptions } from './skin.js';
 import {
+  emptyAdjust,
   fingerspellSequence,
   getPreset,
   isTwoHandPose,
   JOINT_NAMES,
+  mixAdjust,
   NEUTRAL_POSE,
   PoseTween,
   Sequencer,
-  solvePose,
+  solvePoseTracked,
+  solveWithAdjust,
   asl,
   aslKeyFor,
+  type CollisionAdjust,
   type FingerName,
   type FingerspellOptions,
   type HandPose,
@@ -67,6 +72,9 @@ export class HandModel {
   /** live per-finger parameter proxies (hand.fingers.index.curl = 0.5) */
   readonly fingers: Record<FingerName, LiveFinger>;
 
+  /** UV-space crease map baked from this mesh's geometry (see creases.ts) */
+  private creaseMap: CreaseMap | null = null;
+
   private constructor(side: Side, root: Group, skin: SkinOptions | false) {
     this.side = side;
     this.object3D = root;
@@ -79,8 +87,9 @@ export class HandModel {
         node.frustumCulled = false;
         const mesh = node as SkinnedMesh;
         if (skin !== false) {
+          this.creaseMap ??= bakeCreaseMap(mesh.geometry, side);
           (mesh.material as Material).dispose();
-          mesh.material = createSkinMaterial(skin);
+          mesh.material = createSkinMaterial(skin, this.creaseMap);
         } else {
           const mat = mesh.material as MeshStandardMaterial;
           if (mat?.isMeshStandardMaterial) {
@@ -121,8 +130,9 @@ export class HandModel {
     this.object3D.traverse((node) => {
       const mesh = node as Mesh;
       if (!mesh.isMesh) return;
+      this.creaseMap ??= bakeCreaseMap(mesh.geometry, this.side);
       (mesh.material as Material).dispose();
-      mesh.material = createSkinMaterial(options);
+      mesh.material = createSkinMaterial(options, this.creaseMap);
     });
   }
 
@@ -225,8 +235,7 @@ export class HandModel {
       this.dirty = true;
     }
     if (this.dirty) {
-      this.applyPose(this.currentPose);
-      this.dirty = false;
+      this.dirty = !this.applyPose(this.currentPose, dt);
     }
   }
 
@@ -245,10 +254,21 @@ export class HandModel {
     this.sequencer.stop();
   }
 
-  private applyPose(pose: HandPose): void {
+  /** collision corrections from the previous frame (temporal smoothing) */
+  private adjustState: CollisionAdjust = emptyAdjust();
+
+  /**
+   * Solve and write joint transforms. Collision corrections are smoothed
+   * over time (~80 ms) so a resolving contact never teleports the hand.
+   * Returns true once the corrections have settled (safe to stop updating).
+   */
+  private applyPose(pose: HandPose, dt = Infinity): boolean {
+    const { adjust: target } = solvePoseTracked(pose, { side: this.side }, this.adjustState);
+    const alpha = dt === Infinity ? 1 : 1 - Math.exp(-dt / 80);
+    this.adjustState = mixAdjust(this.adjustState, target, alpha);
     // the rig keeps joints as flat siblings (WebXR convention), so write
     // armature-space position AND rotation computed by the core's FK
-    const transforms = solvePose(pose, { side: this.side });
+    const transforms = solveWithAdjust(pose, { side: this.side }, this.adjustState);
     for (const [name, bone] of this.bones) {
       const t = transforms[name];
       bone.position.set(t.position[0], t.position[1], t.position[2]);
@@ -259,6 +279,19 @@ export class HandModel {
         t.rotation[3],
       );
     }
+    // settled when the smoothed corrections have reached the target
+    const diff =
+      Math.abs(this.adjustState.thumbLift - target.thumbLift) +
+      Math.abs(this.adjustState.thumbRetract - target.thumbRetract) +
+      Math.abs(this.adjustState.thumbCurl - target.thumbCurl) +
+      (['thumb', 'index', 'middle', 'ring', 'pinky'] as const).reduce(
+        (s, f) =>
+          s +
+          Math.abs((this.adjustState.spreadAngle[f] ?? 0) - (target.spreadAngle[f] ?? 0)) +
+          Math.abs((this.adjustState.curlAngle[f] ?? 0) - (target.curlAngle[f] ?? 0)),
+        0,
+      );
+    return diff < 0.002;
   }
 }
 

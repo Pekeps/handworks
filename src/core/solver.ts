@@ -141,9 +141,10 @@ export function solveDeltas(
     const [, mcp, pip, dip] = fingerJoints(finger);
 
     const posCurl = Math.max(0, curl);
-    const pipAngle = posCurl * ROM.pipFlex;
+    const fingerCurlAdj = adjust?.curlAngle[finger] ?? 0;
+    const pipAngle = posCurl * ROM.pipFlex + fingerCurlAdj;
     const tipCurl = fp.curlTip ?? (posCurl * ROM.dipCoupling * ROM.pipFlex) / ROM.dipFlex;
-    const dipAngle = maybeClamp(tipCurl, -0.2, 1, doClamp) * ROM.dipFlex;
+    const dipAngle = maybeClamp(tipCurl, -0.2, 1, doClamp) * ROM.dipFlex + fingerCurlAdj;
 
     const mcpFlexQ = quatFromAxisAngle(axes.fingerCurl, curl * ROM.mcpFlex);
     // collision corrections apply at full strength regardless of curl
@@ -242,10 +243,36 @@ function fkTransforms(deltas: JointDeltas, side: Side): JointTransforms {
  * interpenetration is resolved with small anatomical corrections.
  */
 export function solvePose(pose: HandPose, options: SolveOptions = {}): JointTransforms {
+  return solvePoseTracked(pose, options).transforms;
+}
+
+/**
+ * Like solvePose, but also returns the collision corrections used, and can
+ * warm-start from a previous frame's corrections. Renderers should feed
+ * each frame's `adjust` back in (optionally smoothed with `mixAdjust`) so
+ * collision responses evolve continuously instead of popping.
+ */
+export function solvePoseTracked(
+  pose: HandPose,
+  options: SolveOptions = {},
+  warmStart?: CollisionAdjust,
+): { transforms: JointTransforms; adjust: CollisionAdjust } {
   const side = options.side ?? 'right';
   const collide = options.collide ?? pose.collide ?? true;
   const solve = (adjust: CollisionAdjust) =>
     fkTransforms(solveDeltas(pose, options, adjust), side);
-  if (!collide) return solve(emptyAdjust());
-  return resolveCollisions(solve, { side });
+  if (!collide) {
+    const adjust = emptyAdjust();
+    return { transforms: solve(adjust), adjust };
+  }
+  return resolveCollisions(solve, { side, warmStart });
+}
+
+/** Solve with a FIXED set of collision corrections (no resolution pass). */
+export function solveWithAdjust(
+  pose: HandPose,
+  options: SolveOptions,
+  adjust: CollisionAdjust,
+): JointTransforms {
+  return fkTransforms(solveDeltas(pose, options, adjust), options.side ?? 'right');
 }

@@ -314,3 +314,15 @@ describe('collision resolution', () => {
     expect(off).toEqual(explicit);
   });
 });
+
+describe('palm collision', () => {
+  it('a fully curled finger rests on the palm instead of clipping through', () => {
+    for (const side of ['left', 'right'] as Side[]) {
+      for (const finger of ['index', 'middle', 'pinky'] as const) {
+        const out = solvePose({ fingers: { [finger]: { curl: 1 } } }, { side });
+        const worst = detectContacts(out).reduce((m, c) => Math.max(m, c.depth), 0);
+        expect(worst, `${side} ${finger}`).toBeLessThan(0.002);
+      }
+    }
+  });
+});

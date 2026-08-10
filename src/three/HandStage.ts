@@ -99,6 +99,9 @@ export class HandStage {
     this.scene.add(this.keyLight);
     this.fillLight = new HemisphereLight(0xdde4f5, 0x4a4540, 0.9);
     this.scene.add(this.fillLight);
+    const backFill = new DirectionalLight(0xe8eeff, 0.7);
+    backFill.position.set(-0.3, 0.2, -0.8);
+    this.scene.add(backFill);
 
     this.controls =
       (options.controls ?? true)
