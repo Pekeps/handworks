@@ -24,6 +24,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: 
 .row label { width: 64px; font-size: 13px; color: #c9cdd3; }
 .row input[type='range'] { flex: 1; }
 .row output { width: 38px; font-size: 12px; text-align: right; color: #9aa3ad; }
+.row output.limited { color: #ffb454; font-weight: 600; }
 .grid { display: flex; flex-wrap: wrap; gap: 6px; }
 button {
   background: #2a2e35;

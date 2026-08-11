@@ -20,7 +20,7 @@ import {
   resolveCollisions,
   type CollisionAdjust,
 } from './collision.js';
-import { resolvePose, type HandPose } from './pose.js';
+import { resolvePose, type FingerPose, type HandPose } from './pose.js';
 import {
   AXES,
   FINGER_NAMES,
@@ -146,7 +146,10 @@ export function solveDeltas(
     const tipCurl = fp.curlTip ?? (posCurl * ROM.dipCoupling * ROM.pipFlex) / ROM.dipFlex;
     const dipAngle = maybeClamp(tipCurl, -0.2, 1, doClamp) * ROM.dipFlex + fingerCurlAdj;
 
-    const mcpFlexQ = quatFromAxisAngle(axes.fingerCurl, curl * ROM.mcpFlex);
+    const mcpFlexQ = quatFromAxisAngle(
+      axes.fingerCurl,
+      curl * ROM.mcpFlex + (adjust?.mcpAngle[finger] ?? 0),
+    );
     // collision corrections apply at full strength regardless of curl
     const spreadQ = quatFromAxisAngle(
       axes.fingerSpread,
@@ -275,4 +278,51 @@ export function solveWithAdjust(
   adjust: CollisionAdjust,
 ): JointTransforms {
   return fkTransforms(solveDeltas(pose, options, adjust), options.side ?? 'right');
+}
+
+/**
+ * Fold collision corrections back into pose parameters: the closest
+ * parametric description of what the hand ACTUALLY does after collision
+ * resolution. Lets UIs mirror blocked motion (a slider settles where the
+ * finger stopped) and keeps saved poses physically real. Each parameter is
+ * clamped to its solver range; any residual correction beyond the range
+ * simply remains a (small) internal adjustment on the next solve.
+ */
+export function applyAdjustToPose(pose: HandPose, adjust: CollisionAdjust): HandPose {
+  const p = resolvePose(pose);
+  const fingers: Partial<Record<FingerName, FingerPose>> = {};
+  for (const finger of ['index', 'middle', 'ring', 'pinky'] as const) {
+    const fp = p.fingers[finger];
+    const curlAdj = adjust.curlAngle[finger] ?? 0;
+    // invert the splay formula used in solveDeltas (angle → parameter)
+    const posCurl = clamp(Math.max(0, fp.curl), 0, 1);
+    const perParam = ROM.spreadMax * SPREAD_SCALE[finger] * (1 - 0.8 * posCurl);
+    const out: FingerPose = {
+      curl: clamp(
+        fp.curl + (adjust.mcpAngle[finger] ?? 0) / ROM.mcpFlex + curlAdj / ROM.pipFlex,
+        -ROM.mcpHyper / ROM.mcpFlex,
+        1,
+      ),
+      spread: clamp(fp.spread + (adjust.spreadAngle[finger] ?? 0) / perParam, -1.5, 1.5),
+    };
+    if (fp.curlTip !== null) out.curlTip = clamp(fp.curlTip + curlAdj / ROM.dipFlex, -0.2, 1);
+    fingers[finger] = out;
+  }
+  {
+    const fp = p.fingers.thumb;
+    const out: FingerPose = {
+      curl: clamp(fp.curl + adjust.thumbCurl / ROM.thumbMpFlex, -0.3, 1),
+      spread: clamp(fp.spread - adjust.thumbLift / ROM.thumbCmcAbduct, -1, 1),
+      oppose: clamp(fp.oppose + adjust.thumbRetract / ROM.thumbCmcOppose, 0, 1),
+    };
+    if (fp.curlTip !== null) {
+      out.curlTip = clamp(fp.curlTip + adjust.thumbCurl / ROM.thumbIpFlex, -0.3, 1);
+    }
+    fingers.thumb = out;
+  }
+  const out: HandPose = { fingers };
+  if (pose.wrist) out.wrist = { ...pose.wrist };
+  if (pose.joints) out.joints = { ...pose.joints };
+  if (pose.collide !== undefined) out.collide = pose.collide;
+  return out;
 }

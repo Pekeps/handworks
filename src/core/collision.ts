@@ -14,17 +14,43 @@ import type { FingerName, JointName, Side } from './skeleton.js';
 import { fingerJoints, FINGER_NAMES } from './skeleton.js';
 import type { JointTransforms } from './solver.js';
 
-/** Capsule radii per finger, base→tip segment (metres, generic-hand scale). */
+/**
+ * Capsule radii per finger, base→tip segment (metres). Median shaft radii
+ * measured from the vendored mesh (scripts in repo history) — thinner values
+ * let the mesh visibly clip before a contact is ever detected.
+ */
 const RADII: Record<FingerName, number[]> = {
-  thumb: [0.0095, 0.0085],
-  index: [0.008, 0.0072, 0.0066],
-  middle: [0.008, 0.0072, 0.0066],
-  ring: [0.0075, 0.0068, 0.0062],
-  pinky: [0.0066, 0.006, 0.0055],
+  thumb: [0.01, 0.009],
+  index: [0.009, 0.008, 0.0072],
+  middle: [0.0092, 0.008, 0.0076],
+  ring: [0.0086, 0.0074, 0.007],
+  pinky: [0.0075, 0.0068, 0.0062],
+};
+
+/**
+ * The meshes' fingertip flesh reaches well past the `tip` JOINT (almost a
+ * full distal-phalanx length, measured per digit) — the last capsule is
+ * extended by this fraction of its length so the actual fingertip collides,
+ * not just the bone.
+ */
+const TIP_EXTEND: Record<FingerName, number> = {
+  thumb: 0.07,
+  index: 0.34,
+  middle: 0.41,
+  ring: 0.38,
+  pinky: 0.28,
 };
 
 /** Ignore penetrations shallower than this (fingers may touch). */
-const TOLERANCE = 0.0015;
+const TOLERANCE = 0.001;
+
+/**
+ * Extra allowance for thumb-against-finger contact: a thumb resting on a
+ * fist presses INTO the soft tissue, so it may sink this much deeper than
+ * rigid capsules would allow before counting as penetration. Without it the
+ * thumb hovers off the knuckles it should rest on.
+ */
+const THUMB_SQUISH = 0.0028;
 
 /** A colliding body: a digit, or the palm itself. */
 export type CollisionBody = FingerName | 'palm';
@@ -45,8 +71,16 @@ const PAIRS: [CollisionBody, CollisionBody][] = [
   ['palm', 'pinky'],
 ];
 
-/** palm slab half-thickness (capsule radius of the wrist→knuckle fan) */
-const PALM_RADIUS = 0.011;
+/**
+ * Palm slab, measured from the mesh: palmar flesh reaches ~23 mm from the
+ * metacarpal bones near the heel but only ~15–18 mm near the knuckles
+ * (dorsal ~13 mm everywhere), so each wrist→knuckle fan line is split into
+ * a thick heel capsule and a thinner distal one, both offset palmar-side.
+ */
+const PALM_HEEL_RADIUS = 0.017;
+const PALM_HEEL_OFFSET = 0.006;
+const PALM_RADIUS = 0.015;
+const PALM_OFFSET = 0.005;
 
 interface Segment {
   a: Vec3;
@@ -61,24 +95,51 @@ function segmentsOf(finger: FingerName, t: JointTransforms): Segment[] {
   const segs: Segment[] = [];
   // fingers: proximal→intermediate→distal→tip; thumb: proximal→distal→tip
   for (let i = 1; i < joints.length - 1; i++) {
-    segs.push({
-      a: t[joints[i]!].position,
-      b: t[joints[i + 1]!].position,
-      r: radii[i - 1] ?? radii[radii.length - 1]!,
-    });
+    const a = t[joints[i]!].position;
+    let b = t[joints[i + 1]!].position;
+    if (i === joints.length - 2) {
+      const e = TIP_EXTEND[finger];
+      b = [b[0] + (b[0] - a[0]) * e, b[1] + (b[1] - a[1]) * e, b[2] + (b[2] - a[2]) * e];
+    }
+    segs.push({ a, b, r: radii[i - 1] ?? radii[radii.length - 1]! });
   }
   return segs;
 }
 
-/** The palm as a fan of capsules from the wrist to each finger knuckle. */
+/** The palm as a fan of capsules from the wrist to each finger knuckle,
+ *  offset toward the palmar side where the flesh actually is. */
 function palmSegments(t: JointTransforms): Segment[] {
   const wrist = t.wrist.position;
-  return (['index', 'middle', 'ring', 'pinky'] as FingerName[]).map((f) => ({
-    a: wrist,
-    b: t[fingerJoints(f)[1]!].position, // the MCP knuckle
-    r: PALM_RADIUS,
-  }));
+  const knuckle = (f: FingerName): Vec3 => t[fingerJoints(f)[1]!].position;
+  // palmar normal from the knuckle fan itself — follows wrist rotation and
+  // has the correct sign on both hands (mirroring flips the cross product)
+  const vi = sub3(knuckle('index'), wrist);
+  const vp = sub3(knuckle('pinky'), wrist);
+  const n = norm3([
+    -(vi[1] * vp[2] - vi[2] * vp[1]),
+    -(vi[2] * vp[0] - vi[0] * vp[2]),
+    -(vi[0] * vp[1] - vi[1] * vp[0]),
+  ]);
+  const segs: Segment[] = [];
+  for (const f of ['index', 'middle', 'ring', 'pinky'] as FingerName[]) {
+    const b = knuckle(f);
+    const at = (t: number, offset: number): Vec3 => [
+      wrist[0] + (b[0] - wrist[0]) * t + n[0] * offset,
+      wrist[1] + (b[1] - wrist[1]) * t + n[1] * offset,
+      wrist[2] + (b[2] - wrist[2]) * t + n[2] * offset,
+    ];
+    // thick heel half (thenar/hypothenar mounds), thinner knuckle half
+    segs.push({ a: at(0, PALM_HEEL_OFFSET), b: at(0.55, PALM_HEEL_OFFSET), r: PALM_HEEL_RADIUS });
+    segs.push({ a: at(0.5, PALM_OFFSET), b: at(1, PALM_OFFSET), r: PALM_RADIUS });
+  }
+  return segs;
 }
+
+const sub3 = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const norm3 = (a: Vec3): Vec3 => {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
 
 /** Squared distance between two segments (Ericson, Real-Time Collision Detection). */
 function segSegDistance(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3): number {
@@ -138,11 +199,12 @@ export function detectContacts(transforms: JointTransforms): Contact[] {
     // phalanx legitimately borders the palm at the knuckle
     const aSegs = segs[fa];
     const bSegs = fa === 'palm' ? segs[fb as FingerName].slice(1) : segs[fb as FingerName];
+    const tol = TOLERANCE + (fa === 'thumb' ? THUMB_SQUISH : 0);
     let depth = 0;
     for (const sa of aSegs) {
       for (const sb of bSegs) {
         const d = segSegDistance(sa.a, sa.b, sb.a, sb.b);
-        depth = Math.max(depth, sa.r + sb.r - TOLERANCE - d);
+        depth = Math.max(depth, sa.r + sb.r - tol - d);
       }
     }
     if (depth > 0) contacts.push({ a: fa, b: fb as FingerName, depth });
@@ -165,6 +227,10 @@ export interface CollisionAdjust {
   /** extra PIP/DIP flexion per finger, radians (negative backs a curled
    *  finger off the palm so it rests on it instead of clipping through) */
   curlAngle: Partial<Record<FingerName, number>>;
+  /** extra MCP flexion per finger, radians — staggering knuckle flexion is
+   *  the only way to part the proximal shafts of adjacent flexed fingers
+   *  (abduction is nearly parallel to the shaft once the finger is curled) */
+  mcpAngle: Partial<Record<FingerName, number>>;
   /** extra thumb CMC rotation away from the palm, radians */
   thumbLift: number;
   /** extra thumb CMC rotation along the opposition arc, radians */
@@ -177,6 +243,7 @@ export interface CollisionAdjust {
 export const emptyAdjust = (): CollisionAdjust => ({
   spreadAngle: {},
   curlAngle: {},
+  mcpAngle: {},
   thumbLift: 0,
   thumbRetract: 0,
   thumbCurl: 0,
@@ -216,6 +283,7 @@ export function mixAdjust(a: CollisionAdjust, b: CollisionAdjust, t: number): Co
   return {
     spreadAngle: lerpMap(a.spreadAngle, b.spreadAngle, t),
     curlAngle: lerpMap(a.curlAngle, b.curlAngle, t),
+    mcpAngle: lerpMap(a.mcpAngle, b.mcpAngle, t),
     thumbLift: a.thumbLift + (b.thumbLift - a.thumbLift) * t,
     thumbRetract: a.thumbRetract + (b.thumbRetract - a.thumbRetract) * t,
     thumbCurl: a.thumbCurl + (b.thumbCurl - a.thumbCurl) * t,
@@ -223,7 +291,7 @@ export function mixAdjust(a: CollisionAdjust, b: CollisionAdjust, t: number): Co
 }
 
 /** step magnitudes tried per move — small refinements and pocket-escaping jumps */
-const MAGNITUDES = [0.04, 0.12, 0.3, 0.6];
+const MAGNITUDES = [0.015, 0.04, 0.12, 0.3, 0.6];
 const MAX_SPREAD_FIX = 0.35; // ~20°
 const MAX_LIFT = 0.8; // ~46°
 
@@ -232,6 +300,7 @@ const clampAbs = (v: number, max: number): number => Math.max(-max, Math.min(max
 const cloneAdjust = (a: CollisionAdjust): CollisionAdjust => ({
   spreadAngle: { ...a.spreadAngle },
   curlAngle: { ...a.curlAngle },
+  mcpAngle: { ...a.mcpAngle },
   thumbLift: a.thumbLift,
   thumbRetract: a.thumbRetract,
   thumbCurl: a.thumbCurl,
@@ -243,6 +312,10 @@ const bumpSpread = (adj: CollisionAdjust, finger: FingerName, amt: number): void
 
 const bumpCurl = (adj: CollisionAdjust, finger: FingerName, amt: number): void => {
   adj.curlAngle[finger] = clampAbs((adj.curlAngle[finger] ?? 0) + amt, MAX_LIFT);
+};
+
+const bumpMcp = (adj: CollisionAdjust, finger: FingerName, amt: number): void => {
+  adj.mcpAngle[finger] = clampAbs((adj.mcpAngle[finger] ?? 0) + amt, MAX_SPREAD_FIX);
 };
 
 type Move = (adj: CollisionAdjust, amt: number) => void;
@@ -264,12 +337,23 @@ export function resolveCollisions(
   solve: (adjust: CollisionAdjust) => JointTransforms,
   options: ResolveOptions,
 ): ResolveResult {
+  // (worst depth, total depth) — comparing lexicographically means the
+  // descent still makes progress when several contacts tie on the worst
+  // depth, or when a move can only fix a shallower secondary contact
+  const score = (t: JointTransforms): [number, number] => {
+    const contacts = detectContacts(t);
+    return [maxDepth(contacts), contacts.reduce((s, c) => s + c.depth, 0)];
+  };
+  const better = (a: [number, number], b: [number, number]): boolean =>
+    a[0] < b[0] - 1e-6 || (a[0] < b[0] + 1e-6 && a[1] < b[1] - 1e-6);
+
   let adjust = options.warmStart ? cloneAdjust(options.warmStart) : emptyAdjust();
   let transforms = solve(adjust);
-  let current = maxDepth(detectContacts(transforms));
-  const maxIter = options.maxIterations ?? 14;
+  let current = score(transforms);
+  const maxIter = options.maxIterations ?? 16;
+  let changed = false;
 
-  for (let iter = 0; iter < maxIter && current > 0; iter++) {
+  for (let iter = 0; iter < maxIter && current[0] > 0; iter++) {
     // moves relevant to the contacts present right now
     const moves = new Map<string, Move>();
     for (const c of detectContacts(transforms)) {
@@ -278,7 +362,11 @@ export function resolveCollisions(
           adj.thumbLift = clampAbs(adj.thumbLift + amt, MAX_LIFT);
         });
         moves.set('retract', (adj, amt) => {
-          adj.thumbRetract = clampAbs(adj.thumbRetract + amt, MAX_LIFT);
+          // retract may push the thumb FURTHER along the opposition arc
+          // freely, but barely back it out: a large negative retract
+          // un-opposes the thumb entirely (an extended thumb beside a fist
+          // instead of one lifted over it — anatomically wrong escape)
+          adj.thumbRetract = Math.max(-0.15, Math.min(MAX_LIFT, adj.thumbRetract + amt));
         });
         moves.set('tcurl', (adj, amt) => {
           adj.thumbCurl = clampAbs(adj.thumbCurl + amt, MAX_LIFT);
@@ -286,8 +374,10 @@ export function resolveCollisions(
         if (c.a === 'thumb') moves.set(`s:${c.b}`, (adj, amt) => bumpSpread(adj, c.b, amt));
       } else if (c.a === 'palm') {
         // a curled finger reached the palm: ease its PIP/DIP flexion so the
-        // fingertip rests on the palm surface instead of passing through
+        // fingertip rests on the palm surface instead of passing through;
+        // easing the MCP handles the middle phalanx pressing the palm
         moves.set(`c:${c.b}`, (adj, amt) => bumpCurl(adj, c.b, amt));
+        moves.set(`m:${c.b}`, (adj, amt) => bumpMcp(adj, c.b, amt));
       } else {
         const a = c.a as FingerName;
         const b = c.b;
@@ -297,27 +387,34 @@ export function resolveCollisions(
         });
         moves.set(`s:${a}`, (adj, amt) => bumpSpread(adj, a, amt));
         moves.set(`s:${b}`, (adj, amt) => bumpSpread(adj, b, amt));
+        // de-syncing curls/knuckle flexion separates parallel shafts when
+        // both fingers are flexed and abduction can no longer part them
+        moves.set(`c:${a}`, (adj, amt) => bumpCurl(adj, a, amt));
+        moves.set(`c:${b}`, (adj, amt) => bumpCurl(adj, b, amt));
+        moves.set(`m:${a}`, (adj, amt) => bumpMcp(adj, a, amt));
+        moves.set(`m:${b}`, (adj, amt) => bumpMcp(adj, b, amt));
       }
     }
 
-    let best: { adjust: CollisionAdjust; depth: number } | null = null;
+    let best: { adjust: CollisionAdjust; score: [number, number] } | null = null;
     for (const move of moves.values()) {
       for (const sign of [1, -1]) {
         for (const mag of MAGNITUDES) {
           const trial = cloneAdjust(adjust);
           move(trial, sign * mag);
-          const depth = maxDepth(detectContacts(solve(trial)));
-          if (depth < (best?.depth ?? current) - 1e-6) best = { adjust: trial, depth };
+          const s = score(solve(trial));
+          if (better(s, best?.score ?? current)) best = { adjust: trial, score: s };
         }
       }
     }
     if (!best) break; // plateau — no single move helps any further
     adjust = best.adjust;
-    current = best.depth;
+    current = best.score;
     transforms = solve(adjust);
+    changed = true;
   }
 
-  if (current === 0) {
+  if (current[0] === 0) {
     // settle: shrink the total correction to the smallest collision-free
     // scale so digits come to REST against each other instead of hovering
     // apart (a thumb pressed onto a fist should touch it, not float)
@@ -331,6 +428,48 @@ export function resolveCollisions(
     }
     if (hi < 1) {
       adjust = scaleAdjust(adjust, hi);
+      transforms = solve(adjust);
+      changed = true;
+    }
+    // component-wise settle: the global scale can only shrink every
+    // correction together, which leaves e.g. a thumb hovering on a large
+    // lift that other corrections have since made unnecessary. Shrinking
+    // each axis individually drops it until contact actually stops it.
+    // Skipped at steady rest (nothing shrank) to keep quiet frames cheap.
+    if (changed) {
+      const comps: [(a: CollisionAdjust) => number, (a: CollisionAdjust, v: number) => void][] = [
+        [(a) => a.thumbLift, (a, v) => void (a.thumbLift = v)],
+        [(a) => a.thumbRetract, (a, v) => void (a.thumbRetract = v)],
+        [(a) => a.thumbCurl, (a, v) => void (a.thumbCurl = v)],
+      ];
+      for (const f of FINGER_NAMES) {
+        comps.push([(a) => a.spreadAngle[f] ?? 0, (a, v) => void (a.spreadAngle[f] = v)]);
+        comps.push([(a) => a.curlAngle[f] ?? 0, (a, v) => void (a.curlAngle[f] = v)]);
+        comps.push([(a) => a.mcpAngle[f] ?? 0, (a, v) => void (a.mcpAngle[f] = v)]);
+      }
+      for (let round = 0; round < 2; round++) {
+        for (const [get, set] of comps) {
+          const v0 = get(adjust);
+          if (Math.abs(v0) < 1e-4) continue;
+          const free = (s: number): boolean => {
+            const trial = cloneAdjust(adjust);
+            set(trial, v0 * s);
+            return maxDepth(detectContacts(solve(trial))) === 0;
+          };
+          if (free(0)) {
+            set(adjust, 0);
+            continue;
+          }
+          let clo = 0;
+          let chi = 1;
+          for (let step = 0; step < 5; step++) {
+            const mid = (clo + chi) / 2;
+            if (free(mid)) chi = mid;
+            else clo = mid;
+          }
+          if (chi < 1) set(adjust, v0 * chi);
+        }
+      }
       transforms = solve(adjust);
     }
   }
@@ -346,6 +485,7 @@ function scaleAdjust(a: CollisionAdjust, s: number): CollisionAdjust {
   return {
     spreadAngle: scaleMap(a.spreadAngle),
     curlAngle: scaleMap(a.curlAngle),
+    mcpAngle: scaleMap(a.mcpAngle),
     thumbLift: a.thumbLift * s,
     thumbRetract: a.thumbRetract * s,
     thumbCurl: a.thumbCurl * s,

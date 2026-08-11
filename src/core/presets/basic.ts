@@ -17,7 +17,8 @@ export const basic: Record<string, HandPose> = {
   },
   fist: {
     fingers: {
-      thumb: { curl: 0.6, oppose: 0.55 },
+      // thumb fitted to wrap across the front of the curled fingers
+      thumb: { curl: 1, oppose: 0.3, spread: -0.6 },
       index: { curl: 1 },
       middle: { curl: 1 },
       ring: { curl: 1 },

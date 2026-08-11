@@ -4,6 +4,7 @@ export * from './skeleton.js';
 export {
   detectContacts,
   emptyAdjust,
+  maxDepth,
   mixAdjust,
   type CollisionAdjust,
   type CollisionBody,

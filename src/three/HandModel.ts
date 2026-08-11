@@ -12,8 +12,11 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { bakeCreaseMap, type CreaseMap } from './creases.js';
 import { createSkinMaterial, type SkinOptions } from './skin.js';
 import {
+  applyAdjustToPose,
+  detectContacts,
   emptyAdjust,
   fingerspellSequence,
+  maxDepth,
   getPreset,
   isTwoHandPose,
   JOINT_NAMES,
@@ -148,6 +151,18 @@ export class HandModel {
     return this.currentPose;
   }
 
+  /**
+   * The pose the hand is ACTUALLY holding: current pose with the collision
+   * corrections folded back into its parameters. When collision prevention
+   * blocks part of a motion, this differs from getPose() — feed it to UIs so
+   * controls settle where the fingers really stopped, or setPose() it to
+   * commit the physical pose as the new intent.
+   */
+  getEffectivePose(): HandPose {
+    const { adjust } = solvePoseTracked(this.currentPose, { side: this.side }, this.adjustState);
+    return applyAdjustToPose(this.currentPose, adjust);
+  }
+
   /** Snap to a pose instantly. Accepts a pose object or preset name ("asl.B"). */
   setPose(pose: HandPose | string): void {
     this.cancelAnimation();
@@ -256,6 +271,11 @@ export class HandModel {
 
   /** collision corrections from the previous frame (temporal smoothing) */
   private adjustState: CollisionAdjust = emptyAdjust();
+  /** the previous frame's UNSMOOTHED solve result — warm-starting the next
+   *  solve from here (a fixed point) keeps the target stable frame-to-frame
+   *  instead of re-deriving it from the moving smoothed state, which made
+   *  touching contacts twitch while settling */
+  private adjustTarget: CollisionAdjust | undefined;
 
   /**
    * Solve and write joint transforms. Collision corrections are smoothed
@@ -263,12 +283,24 @@ export class HandModel {
    * Returns true once the corrections have settled (safe to stop updating).
    */
   private applyPose(pose: HandPose, dt = Infinity): boolean {
-    const { adjust: target } = solvePoseTracked(pose, { side: this.side }, this.adjustState);
+    const { adjust: target } = solvePoseTracked(
+      pose,
+      { side: this.side },
+      this.adjustTarget ?? this.adjustState,
+    );
+    this.adjustTarget = target;
     const alpha = dt === Infinity ? 1 : 1 - Math.exp(-dt / 80);
     this.adjustState = mixAdjust(this.adjustState, target, alpha);
+    // render from the smoothed corrections — continuous, so no twitching.
+    // Only when they visibly penetrate (they lag a fast-moving pose) does a
+    // warm-started cleanup re-resolve kick in; near rest and at touching
+    // contacts the threshold keeps the discrete resolver out of the frame.
+    let transforms = solveWithAdjust(pose, { side: this.side }, this.adjustState);
+    if ((pose.collide ?? true) && maxDepth(detectContacts(transforms)) > 0.0012) {
+      transforms = solvePoseTracked(pose, { side: this.side }, this.adjustState).transforms;
+    }
     // the rig keeps joints as flat siblings (WebXR convention), so write
     // armature-space position AND rotation computed by the core's FK
-    const transforms = solveWithAdjust(pose, { side: this.side }, this.adjustState);
     for (const [name, bone] of this.bones) {
       const t = transforms[name];
       bone.position.set(t.position[0], t.position[1], t.position[2]);
@@ -288,7 +320,8 @@ export class HandModel {
         (s, f) =>
           s +
           Math.abs((this.adjustState.spreadAngle[f] ?? 0) - (target.spreadAngle[f] ?? 0)) +
-          Math.abs((this.adjustState.curlAngle[f] ?? 0) - (target.curlAngle[f] ?? 0)),
+          Math.abs((this.adjustState.curlAngle[f] ?? 0) - (target.curlAngle[f] ?? 0)) +
+          Math.abs((this.adjustState.mcpAngle[f] ?? 0) - (target.mcpAngle[f] ?? 0)),
         0,
       );
     return diff < 0.002;

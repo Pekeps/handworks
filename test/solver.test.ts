@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyAdjustToPose,
   blendPoses,
   DEG,
+  emptyAdjust,
+  solvePoseTracked,
   fingerspellSequence,
   getPreset,
   isTwoHandPose,
@@ -312,6 +315,59 @@ describe('collision resolution', () => {
     const off = solvePose(crossed, { side: 'right' });
     const explicit = solvePose(crossed, { side: 'right', collide: false });
     expect(off).toEqual(explicit);
+  });
+});
+
+describe('applyAdjustToPose (effective pose)', () => {
+  const adjustSize = (a: import('../src/core/index.js').CollisionAdjust): number =>
+    Math.abs(a.thumbLift) +
+    Math.abs(a.thumbRetract) +
+    Math.abs(a.thumbCurl) +
+    Object.values(a.spreadAngle).reduce((s, v) => s + Math.abs(v ?? 0), 0) +
+    Object.values(a.curlAngle).reduce((s, v) => s + Math.abs(v ?? 0), 0);
+
+  it('is the identity when there is nothing to correct', () => {
+    const pose: HandPose = { fingers: { index: { curl: 0.3, spread: 0.2 } } };
+    const eff = applyAdjustToPose(pose, emptyAdjust());
+    expect(eff.fingers?.index?.curl).toBeCloseTo(0.3, 6);
+    expect(eff.fingers?.index?.spread).toBeCloseTo(0.2, 6);
+  });
+
+  it('committing the effective pose shrinks the internal corrections', () => {
+    // squeezing straight fingers together forces big spread corrections
+    const pose: HandPose = {
+      fingers: {
+        thumb: { curl: 0.6, oppose: 0.9 },
+        index: { curl: 0.9 },
+        middle: { curl: 0.9 },
+      },
+    };
+    const first = solvePoseTracked(pose, { side: 'right' });
+    const eff = applyAdjustToPose(pose, first.adjust);
+    // the playground re-solves the committed pose warm-started, like HandModel
+    const second = solvePoseTracked(eff, { side: 'right' }, first.adjust);
+    expect(adjustSize(second.adjust)).toBeLessThanOrEqual(adjustSize(first.adjust) + 1e-6);
+    // and the committed pose still renders penetration-free
+    const worst = detectContacts(second.transforms).reduce((m, c) => Math.max(m, c.depth), 0);
+    expect(worst).toBeLessThan(0.002);
+  });
+
+  it('keeps the visible hand (nearly) unchanged when committing', () => {
+    const pose: HandPose = {
+      fingers: { thumb: { curl: 0.7, oppose: 1 }, index: { curl: 1 }, middle: { curl: 1 } },
+    };
+    const before = solvePose(pose, { side: 'right' });
+    const first = solvePoseTracked(pose, { side: 'right' });
+    // renderers re-solve the committed pose warm-started from the current
+    // corrections (HandModel.applyPose), which keeps the same escape route
+    const after = solvePoseTracked(
+      applyAdjustToPose(pose, first.adjust),
+      { side: 'right' },
+      first.adjust,
+    ).transforms;
+    for (const tip of ['thumb-tip', 'index-finger-tip', 'middle-finger-tip'] as const) {
+      expect(dist(before[tip].position, after[tip].position), tip).toBeLessThan(0.012);
+    }
   });
 });
 

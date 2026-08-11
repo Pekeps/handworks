@@ -94,9 +94,23 @@ for (const spec of specs) {
   out.textContent = '0.00';
   input.addEventListener('input', () => {
     const v = Number(input.value);
-    out.textContent = v.toFixed(2);
     hand.mergeFinger(spec.finger, { [spec.param]: v });
+    // live feedback: when collision prevention limits the motion, show where
+    // the joint ACTUALLY is (the slider itself settles there on release)
+    const eff =
+      (hand.getEffectivePose().fingers?.[spec.finger] as Record<string, number> | undefined)?.[
+        spec.param
+      ] ?? v;
+    const limited = Math.abs(eff - v) > 0.015;
+    out.textContent = eff.toFixed(2);
+    out.classList.toggle('limited', limited);
     refreshJson();
+  });
+  input.addEventListener('change', () => {
+    // drag released: commit the physical pose so every slider matches the
+    // real joints — no phantom range, no unreal saved positions
+    hand.setPose(hand.getEffectivePose());
+    refreshSliders();
   });
   row.append(label, input, out);
   sliderDiv.appendChild(row);
@@ -142,6 +156,7 @@ function refreshSliders(): void {
     const s = sliders.get(`${spec.finger}.${spec.param}`)!;
     s.input.value = String(v);
     s.out.textContent = v.toFixed(2);
+    s.out.classList.remove('limited');
   }
   for (const param of ['pitch', 'yaw', 'roll'] as const) {
     const v = pose.wrist?.[param] ?? 0;
